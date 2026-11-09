@@ -1,296 +1,212 @@
-"""PSL Match Winner Predictor: Streamlit app."""
-import base64
-import html as _html
+from __future__ import annotations
+
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
-import predictor
+from predictor import build_history, predict_match, read_match_zip, train_model
 
 ROOT = Path(__file__).parent
-ASSETS = ROOT / "assets"
+ASSET = ROOT / "assets" / "stadium_cricket.jpg"
+TEAMS = [
+    "Islamabad United",
+    "Karachi Kings",
+    "Lahore Qalandars",
+    "Multan Sultans",
+    "Peshawar Zalmi",
+    "Quetta Gladiators",
+    "Rawalpindiz",
+    "Hyderabad Kingsmen",
+]
 
 st.set_page_config(page_title="PSL Match Predictor", page_icon="🏏", layout="wide")
 
-# ----------------------------------------------------------------------------
-# Team look (approximate team colours; short codes instead of logos)
-# ----------------------------------------------------------------------------
-TEAM_STYLE = {
-    "Lahore Qalandars":   ("#22c55e", "LQ"),
-    "Karachi Kings":      ("#3b82f6", "KK"),
-    "Islamabad United":   ("#ef4444", "IU"),
-    "Multan Sultans":     ("#2dd4bf", "MS"),
-    "Peshawar Zalmi":     ("#facc15", "PZ"),
-    "Quetta Gladiators":  ("#a855f7", "QG"),
-    "Rawalpindiz":        ("#f97316", "RWP"),
-    "Hyderabad Kingsmen": ("#ec4899", "HYD"),
-}
+
+def load_matches(contents: bytes) -> pd.DataFrame:
+    return read_match_zip(contents)
 
 
-def team_style(name: str):
-    colour, code = TEAM_STYLE.get(name, ("#94a3b8", "".join(w[0] for w in name.split()[:3]).upper()))
-    return colour, code
+@st.cache_data(show_spinner=False)
+def cached_matches(contents: bytes) -> pd.DataFrame:
+    return load_matches(contents)
 
 
-def esc(text: str) -> str:
-    return _html.escape(str(text))
+def hero_image_css() -> str:
+    if not ASSET.exists():
+        return ""
+    import base64
+
+    encoded = base64.b64encode(ASSET.read_bytes()).decode("ascii")
+    return f"url('data:image/jpeg;base64,{encoded}')"
 
 
-def flat(markup: str) -> str:
-    """Remove indentation/newlines so Markdown never treats our HTML as a code block."""
-    return "".join(line.strip() for line in markup.splitlines())
+st.markdown(
+    f"""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap');
+    :root {{ --pitch:#a6f45c; --ink:#f3f4ed; --muted:#a5aa9f; --panel:#171b18; --edge:#2a302b; }}
+    html, body, [class*="css"] {{ font-family:'DM Sans',sans-serif; }}
+    .stApp {{ background:radial-gradient(ellipse at 75% 0%,#17241a 0%,#0e110f 45%,#0b0d0b 100%); color:var(--ink); }}
+    [data-testid="stHeader"] {{ background:transparent; }}
+    [data-testid="stSidebar"] {{ background:#101410; border-right:1px solid var(--edge); }}
+    [data-testid="stSidebar"] * {{ color:var(--ink); }}
+    .main .block-container {{ max-width:1320px; padding-top:1.25rem; padding-bottom:4rem; }}
+    .brandbar {{ display:flex; align-items:center; justify-content:space-between; margin:0 0 1rem; color:#d9dfd6; font-size:12px; letter-spacing:1.5px; text-transform:uppercase; }}
+    .brandmark {{ color:var(--pitch); font-weight:700; }}
+    .live-tag {{ border:1px solid #39433a; border-radius:99px; padding:7px 12px; color:#c6d0c3; font-size:10px; letter-spacing:1px; }}
+    .hero {{ min-height:354px; display:flex; align-items:center; position:relative; overflow:hidden; border:1px solid #353a34; border-radius:8px; padding:46px 5.2%; background-image:linear-gradient(90deg,rgba(8,12,9,.96) 0%,rgba(8,12,9,.84) 37%,rgba(8,12,9,.14) 100%),{hero_image_css()}; background-size:cover; background-position:center 42%; }}
+    .hero-copy {{ max-width:570px; }}
+    .eyebrow {{ display:inline-flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid #44533e; border-radius:99px; color:#c8f397; font-size:10px; font-weight:700; letter-spacing:1.6px; text-transform:uppercase; }}
+    .eyebrow span {{ width:7px; height:7px; border-radius:50%; background:var(--pitch); box-shadow:0 0 12px var(--pitch); }}
+    .hero h1 {{ margin:22px 0 8px; color:#f4f5ed; font-family:'Barlow Condensed',sans-serif; font-size:clamp(52px,7vw,88px); font-weight:800; line-height:.88; letter-spacing:.5px; text-transform:uppercase; }}
+    .hero h1 em {{ color:var(--pitch); font-style:normal; }}
+    .hero p {{ max-width:420px; margin:18px 0 0; color:#c4c9c0; font-size:14px; line-height:1.7; }}
+    .section-head {{ display:flex; align-items:end; justify-content:space-between; gap:16px; margin:34px 0 16px; }}
+    .section-head h2 {{ margin:0; color:var(--ink); font-family:'Barlow Condensed',sans-serif; font-size:30px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; }}
+    .section-head p {{ margin:4px 0 0; color:var(--muted); font-size:12px; }}
+    .metric-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }}
+    .metric {{ padding:17px 19px; border:1px solid var(--edge); border-radius:6px; background:linear-gradient(130deg,#171b18,#111512); }}
+    .metric-label {{ color:var(--muted); font-size:10px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase; }}
+    .metric-value {{ margin-top:9px; color:#f2f4ec; font-family:'Barlow Condensed',sans-serif; font-size:34px; font-weight:700; line-height:1; }}
+    .metric-note {{ margin-top:7px; color:#8f978e; font-size:11px; }}
+    .form-wrap {{ padding:24px; border:1px solid var(--edge); border-radius:6px; background:#141815; }}
+    .vs {{ display:grid; place-items:center; height:100%; min-height:70px; color:#778075; font-family:'Barlow Condensed',sans-serif; font-size:20px; font-weight:700; }}
+    .result {{ padding:24px; border:1px solid #374432; border-radius:6px; background:linear-gradient(110deg,#172019,#121613); }}
+    .result-kicker {{ color:#b4c9a3; font-size:10px; font-weight:700; letter-spacing:1.6px; text-transform:uppercase; }}
+    .result-winner {{ margin:8px 0 3px; color:var(--pitch); font-family:'Barlow Condensed',sans-serif; font-size:40px; font-weight:700; line-height:1.05; }}
+    .result-pct {{ color:#e1e8dc; font-size:13px; }}
+    .prob-label {{ display:flex; justify-content:space-between; margin:19px 0 7px; color:#c1c8bc; font-size:11px; }}
+    .fineprint {{ color:#929b90; font-size:11px; line-height:1.65; }}
+    div[data-testid="stButton"] button {{ min-height:46px; border:0; border-radius:4px; background:var(--pitch); color:#10150c; font-weight:800; }}
+    div[data-testid="stButton"] button:hover {{ background:#befb7e; color:#10150c; }}
+    div[data-testid="stSelectbox"] label, div[data-testid="stCheckbox"] label {{ color:#cbd0c7; font-size:12px; font-weight:600; }}
+    div[data-baseweb="select"] > div {{ border-color:#3a413b; background:#111512; }}
+    [data-testid="stAlert"] {{ border-radius:5px; }}
+    .footer-note {{ margin-top:30px; padding-top:14px; border-top:1px solid #282d29; color:#7f887e; font-size:10px; }}
+    @media (max-width:700px) {{
+      .hero {{ min-height:330px; padding:28px 22px; background-position:62% center; }}
+      .hero h1 {{ font-size:58px; }}
+      .metric-grid {{ grid-template-columns:1fr; }}
+      .section-head {{ align-items:flex-start; flex-direction:column; }}
+      .form-wrap {{ padding:17px; }}
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
+with st.sidebar:
+    st.markdown("### 🏏 PSL MATCH DESK")
+    st.caption("Your historical match file stays in this app session.")
+    uploaded = st.file_uploader(
+        "Match archive (.zip)",
+        type=["zip"],
+        help="Choose the ZIP of PSL match JSON files used by the notebook.",
+    )
+    st.markdown("---")
+    st.markdown("**Data needed**")
+    st.caption("A ZIP containing one JSON file per match. The notebook itself does not include these match files.")
+    st.markdown("---")
+    st.caption("Powered by your notebook's Logistic Regression (toss + Elo) model.")
 
-# ----------------------------------------------------------------------------
-# Background: your own photo (assets/background.jpg|png|webp) or the built-in SVG
-# ----------------------------------------------------------------------------
-@st.cache_data
-def background_css_url() -> str:
-    for name, mime in [("background.jpg", "image/jpeg"), ("background.jpeg", "image/jpeg"),
-                       ("background.png", "image/png"), ("background.webp", "image/webp"),
-                       ("stadium_batsman.svg", "image/svg+xml")]:
-        path = ASSETS / name
-        if path.exists():
-            b64 = base64.b64encode(path.read_bytes()).decode()
-            return f"data:{mime};base64,{b64}"
-    return ""
+st.markdown(
+    """
+    <div class="brandbar"><div class="brandmark">◉ &nbsp; PSL / MATCH DESK</div><div class="live-tag">● &nbsp; PRE-MATCH ANALYSIS</div></div>
+    <section class="hero"><div class="hero-copy">
+      <div class="eyebrow"><span></span> YOUR MATCH. YOUR CALL.</div>
+      <h1>Own the<br><em>moment.</em></h1>
+      <p>Pick the sides, set the toss winner, and see how past PSL results shape the odds.</p>
+    </div></section>
+    """,
+    unsafe_allow_html=True,
+)
 
-
-CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Poppins:wght@400;500;600;700&display=swap');
-
-html, body, [class*="css"], .stApp { font-family: 'Poppins', sans-serif; }
-
-.stApp {
-    background:
-        linear-gradient(180deg, rgba(2,12,8,0.55) 0%, rgba(2,12,8,0.78) 100%),
-        url("__BG__") center center / cover no-repeat fixed,
-        #06251a;
-}
-[data-testid="stHeader"] { background: transparent; }
-#MainMenu, footer { visibility: hidden; }
-.block-container { padding-top: 2rem; max-width: 1100px; }
-
-/* ---------- hero ---------- */
-.hero { text-align: center; margin: 0 0 1.6rem 0; animation: fadeUp .7s ease both; }
-.hero .ball { font-size: 2.6rem; filter: drop-shadow(0 0 14px rgba(255,80,80,.7)); }
-.hero h1 {
-    font-family: 'Bebas Neue', sans-serif; font-size: clamp(2.6rem, 7vw, 5rem);
-    letter-spacing: .08em; margin: 0; line-height: 1;
-    background: linear-gradient(90deg, #ffffff 0%, #86efac 45%, #facc15 100%);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    text-shadow: 0 0 40px rgba(34,197,94,.25);
-}
-.hero p { color: #cfe9dc; margin: .5rem 0 0 0; font-size: 1.02rem; letter-spacing: .04em; }
-
-/* ---------- glass cards ---------- */
-.glass {
-    background: rgba(8, 28, 20, 0.58);
-    border: 1px solid rgba(134, 239, 172, 0.18);
-    border-radius: 20px; padding: 1.2rem 1.4rem;
-    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-    box-shadow: 0 10px 40px rgba(0,0,0,.35);
-    animation: fadeUp .7s ease both;
-}
-.section-title {
-    font-family: 'Bebas Neue', sans-serif; letter-spacing: .12em; font-size: 1.35rem;
-    color: #86efac; margin: 0 0 .4rem 0;
-}
-
-/* ---------- team badges ---------- */
-.team-chip { display:flex; align-items:center; gap:.8rem; margin: .2rem 0 .6rem 0; }
-.badge {
-    width: 54px; height: 54px; border-radius: 50%; display:flex; align-items:center; justify-content:center;
-    font-family: 'Bebas Neue', sans-serif; font-size: 1.25rem; letter-spacing:.05em; color:#06130d;
-    box-shadow: 0 0 22px var(--c); background: var(--c); border: 2px solid rgba(255,255,255,.55);
-}
-.team-chip .nm { font-weight: 700; font-size: 1.05rem; color: #fff; line-height: 1.1; }
-.team-chip .sub { font-size: .78rem; color: #b7d8c6; }
-.vs {
-    display:flex; align-items:center; justify-content:center; height: 100%;
-    font-family:'Bebas Neue',sans-serif; font-size: 2.4rem; color:#facc15; letter-spacing:.1em;
-    text-shadow: 0 0 18px rgba(250,204,21,.6);
-}
-
-/* ---------- widgets ---------- */
-label, .stRadio label, .stSelectbox label, .stCheckbox label { color: #e6f6ed !important; font-weight: 500; }
-[data-baseweb="select"] > div {
-    background: rgba(255,255,255,.08) !important; border: 1px solid rgba(134,239,172,.3) !important;
-    border-radius: 12px !important; color: #fff !important;
-}
-.stButton { width: 100%; }
-.stButton > button {
-    width: 100%; border: 0; border-radius: 14px; padding: .85rem 1rem;
-    font-family: 'Bebas Neue', sans-serif; font-size: 1.6rem; letter-spacing: .14em;
-    color: #06130d; background: linear-gradient(90deg, #22c55e, #facc15);
-    box-shadow: 0 8px 28px rgba(34,197,94,.35); transition: transform .15s ease, box-shadow .15s ease;
-}
-.stButton > button:hover { transform: translateY(-2px) scale(1.01); box-shadow: 0 12px 34px rgba(250,204,21,.45); color:#06130d; }
-.stButton > button:active { transform: scale(.99); }
-
-/* ---------- result ---------- */
-.winner-banner { text-align:center; margin-bottom: 1rem; }
-.winner-banner .lbl { color:#b7d8c6; letter-spacing:.2em; font-size:.8rem; text-transform:uppercase; }
-.winner-banner .nm {
-    font-family:'Bebas Neue',sans-serif; font-size: clamp(2.2rem, 6vw, 3.8rem); letter-spacing:.06em;
-    color: var(--c); text-shadow: 0 0 30px var(--c); line-height:1.05;
-}
-.winner-banner .tag {
-    display:inline-block; margin-top:.3rem; padding:.2rem .8rem; border-radius:999px; font-size:.8rem;
-    background: rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2); color:#e6f6ed;
-}
-.prob-row { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:.4rem; }
-.prob-row .side { color:#fff; font-weight:600; }
-.prob-row .pct { font-family:'Bebas Neue',sans-serif; font-size:2.4rem; line-height:1; }
-.bar { display:flex; height: 20px; border-radius: 999px; overflow:hidden; background: rgba(255,255,255,.08); }
-.bar > div { height:100%; animation: grow 1s cubic-bezier(.2,.8,.2,1) both; }
-.meta-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:.7rem; margin-top:1rem; }
-.meta { background: rgba(255,255,255,.06); border-radius:12px; padding:.6rem .8rem; }
-.meta .k { color:#9fc8b2; font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; }
-.meta .v { color:#fff; font-weight:600; font-size:.98rem; }
-.note { color:#b7d8c6; font-size:.82rem; margin-top:.9rem; }
-.warn {
-    background: rgba(250,204,21,.12); border:1px solid rgba(250,204,21,.4); color:#fde68a;
-    border-radius:12px; padding:.6rem .9rem; font-size:.88rem; margin-bottom:1rem;
-}
-.footer { text-align:center; color:#8fb9a2; font-size:.78rem; margin: 2rem 0 .5rem 0; }
-
-@keyframes fadeUp { from { opacity:0; transform: translateY(14px); } to { opacity:1; transform:none; } }
-@keyframes grow   { from { width: 0 !important; } }
-</style>
-"""
-st.markdown(CSS.replace("__BG__", background_css_url()), unsafe_allow_html=True)
-
-
-# ----------------------------------------------------------------------------
-# Load model + data
-# ----------------------------------------------------------------------------
-@st.cache_resource
-def get_artifacts():
-    return predictor.load_artifacts()
-
-
-try:
-    art = get_artifacts()
-except Exception as exc:                      # e.g. wrong model type
-    st.error(f"Could not load the model: {exc}")
-    st.stop()
-
-# ----------------------------------------------------------------------------
-# Hero
-# ----------------------------------------------------------------------------
-st.markdown(flat("""
-<div class="hero">
-  <div class="ball">🏏</div>
-  <h1>PSL Match Predictor</h1>
-  <p>Pick the teams, call the toss, and see who the model backs at the Pakistan Super League.</p>
-</div>
-"""), unsafe_allow_html=True)
-
-if art["demo"]:
-    st.markdown(flat("""
-    <div class="warn"><b>Demo mode:</b> <code>psl_best_model.pkl</code> and/or <code>app_data.json</code>
-    were not found, so every team starts at the same rating. Follow the README to add the files from your notebook.</div>
-    """), unsafe_allow_html=True)
-
-teams = art["teams"]
-
-# ----------------------------------------------------------------------------
-# Match set-up
-# ----------------------------------------------------------------------------
-left, mid, right = st.columns([5, 1.2, 5])
-with left:
-    team1 = st.selectbox("Team 1", teams, index=teams.index("Lahore Qalandars") if "Lahore Qalandars" in teams else 0)
-    c1, k1 = team_style(team1)
-    st.markdown(flat(f"""
-    <div class="team-chip"><div class="badge" style="--c:{c1}">{esc(k1)}</div>
-    <div><div class="nm">{esc(team1)}</div><div class="sub">Elo {art['elo'].get(team1, 1500):.0f}</div></div></div>
-    """), unsafe_allow_html=True)
-with mid:
-    st.markdown('<div class="vs">VS</div>', unsafe_allow_html=True)
-with right:
-    default2 = teams.index("Multan Sultans") if "Multan Sultans" in teams else min(1, len(teams) - 1)
-    team2 = st.selectbox("Team 2", teams, index=default2)
-    c2, k2 = team_style(team2)
-    st.markdown(flat(f"""
-    <div class="team-chip"><div class="badge" style="--c:{c2}">{esc(k2)}</div>
-    <div><div class="nm">{esc(team2)}</div><div class="sub">Elo {art['elo'].get(team2, 1500):.0f}</div></div></div>
-    """), unsafe_allow_html=True)
-
-st.markdown('<div class="section-title">Match details</div>', unsafe_allow_html=True)
-d1, d2, d3 = st.columns(3)
-with d1:
-    venue = st.selectbox("Venue", art["venues"])
-with d2:
-    toss_winner = st.radio("Toss won by", [team1, team2], horizontal=True) if team1 != team2 else None
-with d3:
-    decision = st.radio("Elected to", ["Bat first", "Field first"], horizontal=True)
-
-new_season = st.checkbox("First match of a new season (apply the start-of-season Elo reset)")
-
-go = st.button("PREDICT WINNER")
-
-# ----------------------------------------------------------------------------
-# Result
-# ----------------------------------------------------------------------------
-if go:
-    if team1 == team2:
-        st.warning("Please pick two different teams.")
-        st.stop()
-
-    p1 = predictor.predict(art, team1, team2, toss_winner, new_season)
-    p2 = 1 - p1
-    win, wcol = (team1, c1) if p1 >= p2 else (team2, c2)
-    edge = abs(p1 - 0.5)
-    tag = "Toss-up" if edge < 0.05 else ("Slight edge" if edge < 0.12 else "Clear edge")
-    bat_first = toss_winner if decision == "Bat first" else (team2 if toss_winner == team1 else team1)
-
-    st.markdown(flat(f"""
-    <div class="glass" style="margin-top:1.2rem">
-      <div class="winner-banner" style="--c:{wcol}">
-        <div class="lbl">Predicted winner</div>
-        <div class="nm">{esc(win)}</div>
-        <span class="tag">{tag}</span>
-      </div>
-      <div class="prob-row">
-        <div><div class="side">{esc(team1)}</div><div class="pct" style="color:{c1}">{p1:.0%}</div></div>
-        <div style="text-align:right"><div class="side">{esc(team2)}</div><div class="pct" style="color:{c2}">{p2:.0%}</div></div>
-      </div>
-      <div class="bar">
-        <div style="width:{p1*100:.1f}%; background:{c1}"></div>
-        <div style="width:{p2*100:.1f}%; background:{c2}"></div>
-      </div>
-      <div class="meta-grid">
-        <div class="meta"><div class="k">Venue</div><div class="v">{esc(venue)}</div></div>
-        <div class="meta"><div class="k">Toss</div><div class="v">{esc(toss_winner)} chose to {'bat' if decision == 'Bat first' else 'field'}</div></div>
-        <div class="meta"><div class="k">Bats first</div><div class="v">{esc(bat_first)}</div></div>
-      </div>
-      <div class="note">The saved model uses two inputs: who won the toss and the Elo rating gap.
-      Venue and bat/field choice are shown for context only. PSL matches are very hard to predict,
-      so treat this as a fun estimate, not a certainty.</div>
+st.markdown(
+    """
+    <div class="section-head"><div><h2>The numbers behind the call</h2><p>The results from your notebook's walk-forward evaluation.</p></div></div>
+    <div class="metric-grid">
+      <div class="metric"><div class="metric-label">Completed matches</div><div class="metric-value">354</div><div class="metric-note">Across the notebook's tested PSL seasons</div></div>
+      <div class="metric"><div class="metric-label">Top model accuracy</div><div class="metric-value">59.6%</div><div class="metric-note">Logistic Regression · toss + Elo</div></div>
+      <div class="metric"><div class="metric-label">Always pick toss winner</div><div class="metric-value">59.6%</div><div class="metric-note">Same score in that notebook backtest</div></div>
     </div>
-    """), unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
-# ----------------------------------------------------------------------------
-# About the model
-# ----------------------------------------------------------------------------
-with st.expander("About the model"):
-    meta = art.get("meta", {})
-    if meta:
+if uploaded is not None:
+    try:
+        matches = cached_matches(uploaded.getvalue())
+    except (ValueError, OSError, Exception) as error:
+        st.error(f"That archive could not be read: {error}")
+        matches = pd.DataFrame()
+else:
+    matches = pd.DataFrame()
+
+history = pd.DataFrame()
+state = None
+model = None
+if not matches.empty:
+    history, state = build_history(matches)
+    try:
+        model = train_model(history)
+    except ValueError as error:
+        st.warning(str(error))
+
+st.markdown(
+    "<div class='section-head'><div><h2>Build your match-up</h2><p>Choose the teams and the toss winner.</p></div></div>",
+    unsafe_allow_html=True,
+)
+
+team_options = sorted(set(TEAMS + (matches["team1"].tolist() + matches["team2"].tolist() if not matches.empty else [])))
+with st.container(border=True):
+    st.markdown("<div class='form-wrap'>", unsafe_allow_html=True)
+    left, middle, right = st.columns([5, 1, 5])
+    with left:
+        team1 = st.selectbox("HOME SIDE", team_options, index=team_options.index("Lahore Qalandars"))
+    with middle:
+        st.markdown("<div class='vs'>VS</div>", unsafe_allow_html=True)
+    with right:
+        team2_default = "Multan Sultans" if "Multan Sultans" != team1 else "Karachi Kings"
+        team2 = st.selectbox("AWAY SIDE", team_options, index=team_options.index(team2_default))
+    toss_winner = st.selectbox("TOSS WINNER", [team1, team2])
+    new_season = st.checkbox("First match of a new PSL season (reset Elo toward 1500)")
+    predict_clicked = st.button("PREDICT THIS MATCH", use_container_width=True, disabled=(model is None))
+    st.markdown("</div>", unsafe_allow_html=True)
+
+if predict_clicked and model is not None and state is not None:
+    try:
+        chance = predict_match(model, state, team1, team2, toss_winner, new_season)
+        winner = team1 if chance >= 0.5 else team2
+        winner_chance = chance if chance >= 0.5 else 1 - chance
+        st.markdown("<div class='section-head'><div><h2>Match outlook</h2></div></div>", unsafe_allow_html=True)
         st.markdown(
-            f"- **Model:** {meta.get('model_name', art['model_name'])}\n"
-            f"- **Walk-forward accuracy:** {meta.get('accuracy', 0):.1%} on {meta.get('matches_tested', '?')} matches "
-            f"(AUC {meta.get('auc', 0):.2f})\n"
-            f"- **Baselines:** always pick the toss winner {meta.get('toss_baseline', 0):.1%}; "
-            f"always pick the chasing team {meta.get('chase_baseline', 0):.1%}\n"
-            f"- **Trained on:** {meta.get('matches_total', '?')} matches up to {meta.get('last_match', '?')}"
+            f"""
+            <div class="result">
+              <div class="result-kicker">MODEL PICK · HISTORICAL FORM + TOSS</div>
+              <div class="result-winner">{winner}</div>
+              <div class="result-pct">{winner_chance:.0%} estimated win probability</div>
+              <div class="prob-label"><span>{team1}</span><span>{chance:.0%} &nbsp; / &nbsp; {1-chance:.0%}</span><span>{team2}</span></div>
+              <div style="display:flex;height:8px;overflow:hidden;border-radius:99px;background:#384037">
+                <div style="width:{chance:.1%};background:#a6f45c"></div><div style="flex:1;background:#515a50"></div>
+              </div>
+              <p class="fineprint" style="margin:16px 0 0">An estimate from the uploaded historical results, not a guarantee. The selected notebook model uses toss-winner status and Elo difference; it does not include line-ups, injuries, weather, or venue effects.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-    else:
-        st.markdown("Add `app_data.json` (see README) to show the model's test results here.")
+    except ValueError as error:
+        st.error(str(error))
+
+if uploaded is None:
+    st.info("Upload your PSL match JSON ZIP in the left panel to enable predictions. The uploaded notebook contains the model workflow, but not the match archive.")
+elif not matches.empty and model is not None:
     st.markdown(
-        "Every match is predicted by a model trained only on earlier seasons (walk-forward testing). "
-        "The toss is the only clear signal found; heavier models and player-level features did not beat simple rules."
+        f"<div class='footer-note'>Loaded {len(matches)} completed matches · {len(history)} with usable toss data · model retrained from this archive.</div>",
+        unsafe_allow_html=True,
     )
 
-st.markdown('<div class="footer">Built with Streamlit · scikit-learn · ball-by-ball PSL data</div>', unsafe_allow_html=True)
+st.markdown(
+    "<div class='footer-note'>Backtest results are from the uploaded notebook's recorded run. Its toss + Elo model and the toss-winner baseline both scored 59.6%; the notebook did not establish a statistically clear advantage over always picking the chasing side.</div>",
+    unsafe_allow_html=True,
+)
