@@ -1,84 +1,172 @@
-"""Prediction logic for the PSL Match Winner Predictor.
-
-Kept separate from the Streamlit UI so it can be tested without Streamlit.
-It mirrors `predict_match()` from the notebook (Step 11):
-  1. take each team's current Elo rating,
-  2. ask the saved model twice (each team as "team1") and average,
-     which removes any bias from the arbitrary team order.
-"""
+"""Match-history feature builder and Elo-backed PSL prediction helpers."""
 from __future__ import annotations
 
+import copy
+import io
 import json
-from pathlib import Path
+import zipfile
+from collections import defaultdict
+from pathlib import PurePosixPath
+from typing import Any
 
-import joblib
+import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).parent
-MODEL_PATH = ROOT / "psl_best_model.pkl"   # saved by the notebook (Step 10)
-DATA_PATH = ROOT / "app_data.json"         # exported by export_for_app.py
-
-BASE_ELO = 1500.0
-SUPPORTED_FEATURES = {"toss_won_t1", "elo_diff"}
-
-# Only used for "demo mode", when the notebook files have not been added yet.
-DEFAULT_TEAMS = [
-    "Hyderabad Kingsmen", "Islamabad United", "Karachi Kings", "Lahore Qalandars",
-    "Multan Sultans", "Peshawar Zalmi", "Quetta Gladiators", "Rawalpindiz",
-]
-DEFAULT_VENUES = [
-    "Gaddafi Stadium, Lahore", "National Stadium, Karachi",
-    "Rawalpindi Cricket Stadium", "Dubai International Cricket Stadium",
-]
+MODEL_FEATURES = ["toss_won_t1", "elo_diff"]
 
 
-def load_artifacts() -> dict:
-    """Load the saved model + team data. Falls back to demo mode if files are missing."""
-    art = {
-        "model": None, "features": [], "model_name": None,
-        "elo": {t: BASE_ELO for t in DEFAULT_TEAMS},
-        "teams": list(DEFAULT_TEAMS), "venues": list(DEFAULT_VENUES),
-        "meta": {}, "demo": True,
+def _parse_match(document: dict[str, Any], match_id: int) -> dict[str, Any] | None:
+    info = document.get("info", {})
+    teams = info.get("teams", [])
+    innings = document.get("innings", [])
+    dates = info.get("dates", [])
+    if len(teams) != 2 or not dates:
+        return None
+    outcome = info.get("outcome", {})
+    winner = outcome.get("winner") or outcome.get("eliminator")
+    if winner not in teams:
+        return None
+    toss = info.get("toss", {})
+    return {
+        "match_id": match_id,
+        "date": pd.to_datetime(dates[0], errors="coerce"),
+        "season": str(info.get("season", "Unknown")),
+        "venue": info.get("venue") or "Unknown venue",
+        "team1": teams[0],
+        "team2": teams[1],
+        "toss_winner": toss.get("winner"),
+        "winner": winner,
+        "bat_first": innings[0].get("team") if innings else None,
     }
-    if DATA_PATH.exists():
-        data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
-        art["elo"] = {k: float(v) for k, v in data["elo"].items()}
-        art["teams"] = sorted(data.get("teams") or art["elo"].keys())
-        art["venues"] = data.get("venues") or art["venues"]
-        art["meta"] = data.get("meta", {})
-    if MODEL_PATH.exists():
-        saved = joblib.load(MODEL_PATH)
-        unsupported = set(saved["features"]) - SUPPORTED_FEATURES
-        if unsupported:
-            raise ValueError(
-                f"The saved model uses features this app cannot build: {sorted(unsupported)}. "
-                "The app supports the 'Logistic (toss + Elo)' model (features: toss_won_t1, elo_diff)."
-            )
-        art.update(model=saved["model"], features=list(saved["features"]),
-                   model_name=saved["name"], demo=False)
-    return art
 
 
-def regress_elo(elo: dict) -> dict:
-    """Start-of-season reset used in the notebook: pull ratings 25% back to 1500."""
-    return {t: 0.75 * v + 0.25 * BASE_ELO for t, v in elo.items()}
+def read_match_zip(contents: bytes) -> pd.DataFrame:
+    """Read match JSON files from an archive without extracting paths to disk."""
+    rows: list[dict[str, Any]] = []
+    with zipfile.ZipFile(io.BytesIO(contents)) as archive:
+        for member in archive.infolist():
+            path = PurePosixPath(member.filename)
+            if member.is_dir() or path.suffix.lower() != ".json":
+                continue
+            try:
+                document = json.loads(archive.read(member).decode("utf-8"))
+                match_id = int(path.stem)
+                row = _parse_match(document, match_id)
+                if row is not None and not pd.isna(row["date"]):
+                    rows.append(row)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError, KeyError, TypeError):
+                continue
+    if not rows:
+        return pd.DataFrame()
+    result = pd.DataFrame(rows).drop_duplicates("match_id")
+    result["venue"] = result["venue"].replace(
+        {"National Bank Cricket Arena, Karachi": "National Stadium, Karachi"}
+    )
+    return result.sort_values(["date", "match_id"]).reset_index(drop=True)
 
 
-def predict(art: dict, team1: str, team2: str, toss_winner: str, new_season: bool = False) -> float:
-    """Return the probability that `team1` wins."""
+class TeamState:
+    """A lightweight running Elo memory; update only after a match is featured."""
+
+    K = 20
+
+    def __init__(self) -> None:
+        self.elo: defaultdict[str, float] = defaultdict(lambda: 1500.0)
+
+    def new_season(self) -> None:
+        for team in list(self.elo):
+            self.elo[team] = 0.75 * self.elo[team] + 0.25 * 1500
+
+    def features(self, team1: str, team2: str, toss_winner: str) -> dict[str, float]:
+        return {
+            "toss_won_t1": float(toss_winner == team1),
+            "elo_diff": float(self.elo[team1] - self.elo[team2]),
+        }
+
+    def update(self, team1: str, team2: str, winner: str) -> None:
+        loser = team2 if winner == team1 else team1
+        expected = 1 / (1 + 10 ** ((self.elo[loser] - self.elo[winner]) / 400))
+        change = self.K * (1 - expected)
+        self.elo[winner] += change
+        self.elo[loser] -= change
+
+
+def build_history(raw_matches: pd.DataFrame) -> tuple[pd.DataFrame, TeamState]:
+    """Replay matches in date order and create leakage-safe toss/Elo features."""
+    if raw_matches.empty:
+        return pd.DataFrame(), TeamState()
+
+    ordered = raw_matches.sort_values(["date", "match_id"]).reset_index(drop=True)
+    randomizer = np.random.default_rng(42)
+    state = TeamState()
+    previous_season: str | None = None
+    records: list[dict[str, Any]] = []
+
+    for row in ordered.itertuples(index=False):
+        season = str(row.season)
+        if previous_season is not None and season != previous_season:
+            state.new_season()
+        previous_season = season
+
+        team1, team2 = row.team1, row.team2
+        if randomizer.random() < 0.5:
+            team1, team2 = team2, team1
+        toss_winner = row.toss_winner
+        state.elo[team1]
+        state.elo[team2]
+
+        if toss_winner in (team1, team2):
+            record = {
+                "team1": team1,
+                "team2": team2,
+                "winner": row.winner,
+                "team1_won": int(row.winner == team1),
+                **state.features(team1, team2, toss_winner),
+            }
+            records.append(record)
+        state.update(team1, team2, row.winner)
+
+    return pd.DataFrame(records), state
+
+
+def train_model(history: pd.DataFrame):
+    """Fit the notebook's best walk-forward model: logistic regression on toss + Elo."""
+    if len(history) < 20 or history["team1_won"].nunique() < 2:
+        raise ValueError("Add at least 20 completed matches with toss information and both outcomes.")
+
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    model = Pipeline(
+        [
+            ("scale", StandardScaler()),
+            ("logistic", LogisticRegression(C=1, max_iter=1000, random_state=42)),
+        ]
+    )
+    model.fit(history[MODEL_FEATURES], history["team1_won"])
+    return model
+
+
+def predict_match(
+    model,
+    final_state: TeamState,
+    team1: str,
+    team2: str,
+    toss_winner: str,
+    new_season: bool = False,
+) -> float:
+    """Return team1's probability, averaging both team orders to limit order bias."""
     if team1 == team2:
-        raise ValueError("Pick two different teams.")
+        raise ValueError("Choose two different teams.")
     if toss_winner not in (team1, team2):
-        raise ValueError("The toss winner must be one of the two teams.")
-    elo = regress_elo(art["elo"]) if new_season else art["elo"]
-    e1, e2 = elo.get(team1, BASE_ELO), elo.get(team2, BASE_ELO)
+        raise ValueError("The toss winner must be one of the selected teams.")
 
-    def p_first_wins(a: str, b: str, ea: float, eb: float) -> float:
-        if art["model"] is None:                       # demo mode: plain Elo expectation
-            return 1 / (1 + 10 ** ((eb - ea) / 400))
-        row = {"toss_won_t1": int(toss_winner == a), "elo_diff": ea - eb}
-        X = pd.DataFrame([row])[art["features"]]
-        return float(art["model"].predict_proba(X)[0, 1])
-
-    # ask twice (each team as "team1") and average, exactly like the notebook
-    return (p_first_wins(team1, team2, e1, e2) + 1 - p_first_wins(team2, team1, e2, e1)) / 2
+    state = copy.deepcopy(final_state)
+    if new_season:
+        state.new_season()
+    first = state.features(team1, team2, toss_winner)
+    second = state.features(team2, team1, toss_winner)
+    p_first = float(model.predict_proba(pd.DataFrame([first])[MODEL_FEATURES])[0, 1])
+    p_second = float(model.predict_proba(pd.DataFrame([second])[MODEL_FEATURES])[0, 1])
+    return (p_first + 1 - p_second) / 2
