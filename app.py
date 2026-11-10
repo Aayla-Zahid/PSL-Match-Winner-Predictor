@@ -2,16 +2,16 @@
 import base64
 import html as _html
 from pathlib import Path
- 
+
 import streamlit as st
- 
+
 import predictor
- 
+
 ROOT = Path(__file__).parent
 ASSETS = ROOT / "assets"
- 
+
 st.set_page_config(page_title="PSL Match Predictor", page_icon="🏏", layout="wide")
- 
+
 # ----------------------------------------------------------------------------
 # Team look (approximate team colours; short codes instead of logos)
 # ----------------------------------------------------------------------------
@@ -25,22 +25,22 @@ TEAM_STYLE = {
     "Rawalpindiz":        ("#f97316", "RWP"),
     "Hyderabad Kingsmen": ("#ec4899", "HYD"),
 }
- 
- 
+
+
 def team_style(name: str):
     colour, code = TEAM_STYLE.get(name, ("#94a3b8", "".join(w[0] for w in name.split()[:3]).upper()))
     return colour, code
- 
- 
+
+
 def esc(text: str) -> str:
     return _html.escape(str(text))
- 
- 
+
+
 def flat(markup: str) -> str:
     """Remove indentation/newlines so Markdown never treats our HTML as a code block."""
     return "".join(line.strip() for line in markup.splitlines())
- 
- 
+
+
 # ----------------------------------------------------------------------------
 # Background: your own photo (assets/background.jpg|png|webp) or the built-in SVG
 # ----------------------------------------------------------------------------
@@ -54,24 +54,24 @@ def background_css_url() -> str:
             b64 = base64.b64encode(path.read_bytes()).decode()
             return f"data:{mime};base64,{b64}"
     return ""
- 
- 
+
+
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Poppins:wght@400;500;600;700&display=swap');
- 
+
 html, body, [class*="css"], .stApp { font-family: 'Poppins', sans-serif; }
- 
+
 .stApp {
     background:
-        linear-gradient(180deg, rgba(2,12,8,0.55) 0%, rgba(2,12,8,0.78) 100%),
+        linear-gradient(180deg, rgba(2,12,8,0.18) 0%, rgba(2,12,8,0.55) 100%),
         url("__BG__") center center / cover no-repeat fixed,
         #06251a;
 }
 [data-testid="stHeader"] { background: transparent; }
 #MainMenu, footer { visibility: hidden; }
 .block-container { padding-top: 2rem; max-width: 1100px; }
- 
+
 /* ---------- hero ---------- */
 .hero { text-align: center; margin: 0 0 1.6rem 0; animation: fadeUp .7s ease both; }
 .hero .ball { font-size: 2.6rem; filter: drop-shadow(0 0 14px rgba(255,80,80,.7)); }
@@ -83,7 +83,7 @@ html, body, [class*="css"], .stApp { font-family: 'Poppins', sans-serif; }
     text-shadow: 0 0 40px rgba(34,197,94,.25);
 }
 .hero p { color: #cfe9dc; margin: .5rem 0 0 0; font-size: 1.02rem; letter-spacing: .04em; }
- 
+
 /* ---------- glass cards ---------- */
 .glass {
     background: rgba(8, 28, 20, 0.58);
@@ -97,7 +97,7 @@ html, body, [class*="css"], .stApp { font-family: 'Poppins', sans-serif; }
     font-family: 'Bebas Neue', sans-serif; letter-spacing: .12em; font-size: 1.35rem;
     color: #86efac; margin: 0 0 .4rem 0;
 }
- 
+
 /* ---------- team badges ---------- */
 .team-chip { display:flex; align-items:center; gap:.8rem; margin: .2rem 0 .6rem 0; }
 .badge {
@@ -112,7 +112,7 @@ html, body, [class*="css"], .stApp { font-family: 'Poppins', sans-serif; }
     font-family:'Bebas Neue',sans-serif; font-size: 2.4rem; color:#facc15; letter-spacing:.1em;
     text-shadow: 0 0 18px rgba(250,204,21,.6);
 }
- 
+
 /* ---------- widgets ---------- */
 label, .stRadio label, .stSelectbox label, .stCheckbox label { color: #e6f6ed !important; font-weight: 500; }
 [data-baseweb="select"] > div {
@@ -128,7 +128,7 @@ label, .stRadio label, .stSelectbox label, .stCheckbox label { color: #e6f6ed !i
 }
 .stButton > button:hover { transform: translateY(-2px) scale(1.01); box-shadow: 0 12px 34px rgba(250,204,21,.45); color:#06130d; }
 .stButton > button:active { transform: scale(.99); }
- 
+
 /* ---------- result ---------- */
 .winner-banner { text-align:center; margin-bottom: 1rem; }
 .winner-banner .lbl { color:#b7d8c6; letter-spacing:.2em; font-size:.8rem; text-transform:uppercase; }
@@ -155,28 +155,44 @@ label, .stRadio label, .stSelectbox label, .stCheckbox label { color: #e6f6ed !i
     border-radius:12px; padding:.6rem .9rem; font-size:.88rem; margin-bottom:1rem;
 }
 .footer { text-align:center; color:#8fb9a2; font-size:.78rem; margin: 2rem 0 .5rem 0; }
- 
+
 @keyframes fadeUp { from { opacity:0; transform: translateY(14px); } to { opacity:1; transform:none; } }
 @keyframes grow   { from { width: 0 !important; } }
 </style>
 """
 st.markdown(CSS.replace("__BG__", background_css_url()), unsafe_allow_html=True)
- 
- 
+
+
 # ----------------------------------------------------------------------------
 # Load model + data
 # ----------------------------------------------------------------------------
 @st.cache_resource
 def get_artifacts():
     return predictor.load_artifacts()
- 
- 
+
+
 try:
     art = get_artifacts()
-except Exception as exc:                      # e.g. wrong model type
+except predictor.MissingFilesError as exc:
+    st.markdown(flat(f"""
+    <div class="hero"><div class="ball">🏏</div><h1>PSL Match Predictor</h1></div>
+    <div class="glass">
+      <div class="section-title">One-time setup needed</div>
+      <p style="color:#e6f6ed">The app could not find <b>{esc(exc)}</b> next to <code>app.py</code>.
+      These two files are created by your notebook:</p>
+      <ol style="color:#e6f6ed">
+        <li>Open the notebook in Colab and run <b>Runtime → Run all</b>.</li>
+        <li>Paste the code from <code>export_for_app.py</code> into a new last cell and run it.
+            It downloads <code>psl_best_model.pkl</code> and <code>app_data.json</code>.</li>
+        <li>Put both files in the same folder as <code>app.py</code> (and commit them to GitHub if the app is deployed), then reload.</li>
+      </ol>
+    </div>
+    """), unsafe_allow_html=True)
+    st.stop()
+except Exception as exc:                      # e.g. wrong model type or version mismatch
     st.error(f"Could not load the model: {exc}")
     st.stop()
- 
+
 # ----------------------------------------------------------------------------
 # Hero
 # ----------------------------------------------------------------------------
@@ -187,15 +203,9 @@ st.markdown(flat("""
   <p>Pick the teams, call the toss, and see who the model backs at the Pakistan Super League.</p>
 </div>
 """), unsafe_allow_html=True)
- 
-if art["demo"]:
-    st.markdown(flat("""
-    <div class="warn"><b>Demo mode:</b> <code>psl_best_model.pkl</code> and/or <code>app_data.json</code>
-    were not found, so every team starts at the same rating. Follow the README to add the files from your notebook.</div>
-    """), unsafe_allow_html=True)
- 
+
 teams = art["teams"]
- 
+
 # ----------------------------------------------------------------------------
 # Match set-up
 # ----------------------------------------------------------------------------
@@ -217,7 +227,7 @@ with right:
     <div class="team-chip"><div class="badge" style="--c:{c2}">{esc(k2)}</div>
     <div><div class="nm">{esc(team2)}</div><div class="sub">Elo {art['elo'].get(team2, 1500):.0f}</div></div></div>
     """), unsafe_allow_html=True)
- 
+
 st.markdown('<div class="section-title">Match details</div>', unsafe_allow_html=True)
 d1, d2, d3 = st.columns(3)
 with d1:
@@ -226,11 +236,11 @@ with d2:
     toss_winner = st.radio("Toss won by", [team1, team2], horizontal=True) if team1 != team2 else None
 with d3:
     decision = st.radio("Elected to", ["Bat first", "Field first"], horizontal=True)
- 
+
 new_season = st.checkbox("First match of a new season (apply the start-of-season Elo reset)")
- 
+
 go = st.button("PREDICT WINNER")
- 
+
 # ----------------------------------------------------------------------------
 # Result
 # ----------------------------------------------------------------------------
@@ -238,14 +248,14 @@ if go:
     if team1 == team2:
         st.warning("Please pick two different teams.")
         st.stop()
- 
+
     p1 = predictor.predict(art, team1, team2, toss_winner, new_season)
     p2 = 1 - p1
     win, wcol = (team1, c1) if p1 >= p2 else (team2, c2)
     edge = abs(p1 - 0.5)
     tag = "Toss-up" if edge < 0.05 else ("Slight edge" if edge < 0.12 else "Clear edge")
     bat_first = toss_winner if decision == "Bat first" else (team2 if toss_winner == team1 else team1)
- 
+
     st.markdown(flat(f"""
     <div class="glass" style="margin-top:1.2rem">
       <div class="winner-banner" style="--c:{wcol}">
@@ -271,7 +281,7 @@ if go:
       so treat this as a fun estimate, not a certainty.</div>
     </div>
     """), unsafe_allow_html=True)
- 
+
 # ----------------------------------------------------------------------------
 # About the model
 # ----------------------------------------------------------------------------
@@ -292,6 +302,5 @@ with st.expander("About the model"):
         "Every match is predicted by a model trained only on earlier seasons (walk-forward testing). "
         "The toss is the only clear signal found; heavier models and player-level features did not beat simple rules."
     )
- 
+
 st.markdown('<div class="footer">Built with Streamlit · scikit-learn · ball-by-ball PSL data</div>', unsafe_allow_html=True)
- 
