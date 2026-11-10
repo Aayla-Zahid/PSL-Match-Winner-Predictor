@@ -178,13 +178,13 @@ except predictor.MissingFilesError as exc:
     <div class="hero"><div class="ball">🏏</div><h1>PSL Match Predictor</h1></div>
     <div class="glass">
       <div class="section-title">One-time setup needed</div>
-      <p style="color:#e6f6ed">The app could not find <b>{esc(exc)}</b> next to <code>app.py</code>.
-      These two files are created by your notebook:</p>
+      <p style="color:#e6f6ed">The app needs <b>{esc(exc)}</b> next to <code>app.py</code>.
+      This file is created by your notebook:</p>
       <ol style="color:#e6f6ed">
         <li>Open the notebook in Colab and run <b>Runtime → Run all</b>.</li>
         <li>Paste the code from <code>export_for_app.py</code> into a new last cell and run it.
-            It downloads <code>psl_best_model.pkl</code> and <code>app_data.json</code>.</li>
-        <li>Put both files in the same folder as <code>app.py</code> (and commit them to GitHub if the app is deployed), then reload.</li>
+            It downloads <code>app_data.json</code>.</li>
+        <li>Put that file in the same folder as <code>app.py</code> (and commit it to GitHub if the app is deployed), then reload.</li>
       </ol>
     </div>
     """), unsafe_allow_html=True)
