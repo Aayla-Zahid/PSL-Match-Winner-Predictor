@@ -1,0 +1,41 @@
+{
+  "elo": {
+    "Islamabad United": 1515.0027338509074,
+    "Quetta Gladiators": 1479.1446810550976,
+    "Karachi Kings": 1488.8951669064577,
+    "Lahore Qalandars": 1515.0013990464538,
+    "Peshawar Zalmi": 1572.9987669492027,
+    "Multan Sultans": 1482.8073078569637,
+    "Hyderabad Kingsmen": 1514.5143368484569,
+    "Rawalpindiz": 1431.63560748646
+  },
+  "teams": [
+    "Hyderabad Kingsmen",
+    "Islamabad United",
+    "Karachi Kings",
+    "Lahore Qalandars",
+    "Multan Sultans",
+    "Peshawar Zalmi",
+    "Quetta Gladiators",
+    "Rawalpindiz"
+  ],
+  "venues": [
+    "Dubai International Cricket Stadium",
+    "Gaddafi Stadium, Lahore",
+    "Multan Cricket Stadium",
+    "National Stadium, Karachi",
+    "Rawalpindi Cricket Stadium",
+    "Sharjah Cricket Stadium",
+    "Sheikh Zayed Stadium, Abu Dhabi"
+  ],
+  "meta": {
+    "model_name": "Logistic (toss + Elo)",
+    "accuracy": 0.596,
+    "auc": 0.588,
+    "toss_baseline": 0.596,
+    "chase_baseline": 0.545,
+    "matches_total": 354,
+    "matches_tested": 275,
+    "last_match": "2026-05-03"
+  }
+}
