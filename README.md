@@ -1,99 +1,116 @@
-🏏 PSL Match Winner Predictor
+# 🏏 PSL Match Winner Predictor
 
-A Streamlit web app that predicts the winner of a Pakistan Super League (PSL) match from the two teams and the toss result, built on a machine-learning project that was tested honestly with walk-forward evaluation.
+A machine learning project that predicts the winner of a **Pakistan Super League (PSL)** match from the two teams, the venue and the toss, built on ball-by-ball data from 354 PSL matches (2016 to 2026).
 
-App screenshot
+### 🚀 [Live demo: psl-match-winner-predictor-aayla.streamlit.app](https://psl-match-winner-predictor-aayla.streamlit.app/)
 
-<!-- Take a screenshot of your running app, save it as docs/screenshot.png -->
-✨ Features
-Pick any two PSL teams, the venue, who won the toss and what they chose
-Win probability for both teams with an animated bar and a "Toss-up / Slight edge / Clear edge" label
-Live Elo rating for each team, with an optional start-of-season reset
-Night-stadium theme with a cricket background (swap in your own photo, see below)
-Honest "About the model" panel showing the real test accuracy and baselines
-🧠 How the model works
-Data: ball-by-ball match files in Cricsheet JSON format (one file per match, 354 matches with a result), turned into one row per match.
-Features: built in date order using only information known before each match (no leakage): recent form, head-to-head, venue record, toss, home advantage, an Elo rating per team, and later player-level batting/bowling ratings.
-Evaluation: walk-forward testing. Train on earlier seasons, predict the next one, repeat. Every match is predicted by a model that never saw it or anything after it.
-Final model: Logistic Regression using two features, toss_won_t1 and elo_diff. Predictions are made twice (each team as "team 1") and averaged to remove team-order bias.
-Results (275 matches, seasons 2018/19 to 2026)
-Model / rule	Accuracy
-Logistic (toss + Elo), used in the app	59.6%
-Baseline: always pick the toss winner	59.6%
-Baseline: always pick the chasing team	54.5%
-Baseline: higher Elo	52.4%
-Logistic Regression (all features)	53.5%
-Random Forest	47.6%
-SVM	51.6%
-Keras neural network	49.5%
+---
 
-Takeaway: the toss is the only clear signal. Complex models, Elo on its own and even player-level features did not reliably beat simple rules, and none of the differences against the chasing-team baseline were statistically significant. PSL (T20 cricket) is very random, and 354 matches is a small dataset. The app should be treated as a fun estimate, not a betting tool.
+## 📌 Overview
 
-📁 Project structure
-psl-match-predictor/
-├── app.py                    # Streamlit interface
-├── predictor.py              # Prediction logic (mirrors predict_match() in the notebook)
-├── export_for_app.py         # Cell to paste at the end of the notebook
-├── PSL_Match_Winner_Predictor.ipynb
-├── psl_best_model.pkl        # saved model (from the notebook, Step 10)
-├── app_data.json             # team Elo ratings, venues, test results (from export_for_app.py)
-├── assets/
-│   └── stadium_batsman.svg   # default background
-├── .streamlit/config.toml    # dark theme
-└── requirements.txt
-🚀 Run it locally
-bash
-git clone https://github.com/<your-username>/psl-match-predictor.git
-cd psl-match-predictor
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+Pick two teams, a venue, the toss winner and the toss decision, and the app shows each team's win probability. The model behind it was chosen after a careful, leakage-free comparison of several algorithms, so the project is as much about **testing honestly** as it is about predicting.
+
+**Headline finding:** T20 cricket is very random. Complex models (Random Forest, SVM, neural network) did **not** beat simple baselines. The **toss** is the only clear signal, and the final model is a small, explainable Logistic Regression using **toss + team Elo rating**.
+
+## ✨ Features
+
+- Win-probability prediction for any pair of PSL teams
+- Inputs: team 1, team 2, venue, toss winner, toss decision (bat / field)
+- Team strength tracked with an **Elo rating** updated after every match
+- Predictions averaged over both team orders to remove ordering bias
+- Streamlit web app, deployed online
+
+## 📊 Dataset
+
+- Source: [Cricsheet](https://cricsheet.org/) PSL ball-by-ball data (`psl_male_json.zip`)
+- 357 match files, one JSON per match
+- 354 matches with a winner after cleaning (3 no-results removed; 4 ties kept, decided by super over)
+- Seasons 2015/16 to 2026
+
+## 🔬 Methodology
+
+| Step | What was done |
+|---|---|
+| 1 | Read the match JSON files into one table and save it as CSV |
+| 2 | Clean the data (drop no-result matches, merge duplicate venue names, randomise team1/team2 order to avoid bias) |
+| 3 | Explore: does the toss matter? (binomial test) |
+| 4 | Feature engineering from information known **before** each match: recent form, overall win rate, head-to-head, venue record, home advantage, toss, Elo rating |
+| 5 | **Walk-forward evaluation**: train on past seasons, test on the next one (no future data leaks into training) |
+| 6 | Compare against baselines and test significance (McNemar's test, 95% intervals) |
+| 7 | ROC curves, calibration and feature importance |
+| 8 | Player-level features (batting and bowling ratings of the playing XI) |
+| 9 | Export the best model's parameters to `app_data.json` for the app |
+
+**Models compared:** Logistic Regression (several feature sets), Random Forest, SVM, Keras neural network.
+
+## 📈 Results
+
+Walk-forward test on 275 matches (2018/19 to 2026):
+
+| Model | Accuracy | AUC |
+|---|---|---|
+| Baseline: always pick the chasing team | 54.5% | n/a |
+| Baseline: always pick the toss winner | 59.6% | n/a |
+| Logistic Regression (all features) | 53.5% | 0.507 |
+| Random Forest | 47.6% | 0.510 |
+| SVM | 51.6% | 0.518 |
+| Keras neural network | 50.5% | 0.499 |
+| **Logistic Regression (toss + Elo), final model** | **59.6%** | **0.588** |
+
+**Key takeaways**
+
+- The toss winner wins **58.8%** of all matches (p = 0.001), so the toss looks like it matters a little.
+- Complex models scored near 50%, which is about the same as guessing.
+- Player-level features did not improve accuracy: with only 354 matches, most players have too little history.
+- With a test set this small, the final model is not statistically proven to beat the "chasing team" baseline (p = 0.125). Expect roughly 55 to 60% accuracy, not certainty.
+- This is a prediction **made at the toss**, not days before the match.
+
+## 🛠️ Tech Stack
+
+Python · pandas · NumPy · scikit-learn · TensorFlow/Keras · SciPy · Matplotlib · Seaborn · Streamlit
+
+## 📁 Project Structure
+
+```
+├── PSL_Match_Winner_Predictor.ipynb   # full analysis and model training
+├── app.py                             # Streamlit web app
+├── app_data.json                      # exported model parameters, team Elo ratings, venues
+├── requirements.txt                   # Python dependencies
+└── README.md
+```
+
+## ▶️ Run Locally
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/<your-username>/<your-repo-name>.git
+cd <your-repo-name>
+
+# 2. Install dependencies
 pip install -r requirements.txt
+
+# 3. Start the app
 streamlit run app.py
-Getting the model files from your notebook
+```
 
-The app needs two files produced by the notebook:
+To retrain: open the notebook in Google Colab, upload `psl_male_json.zip`, run all cells, and the last cell regenerates `app_data.json`.
 
-Run the notebook up to Step 10. This creates psl_best_model.pkl.
-Paste the contents of export_for_app.py into a new cell at the end of the notebook and run it. This creates app_data.json (current Elo ratings, venues and test results).
-Download both files from Colab and put them in the project root, next to app.py.
+## 🔮 Future Work
 
-Until both files are present, the app runs in demo mode (all teams rated equally) and shows a banner saying so.
+- Rate players using other leagues (IPL, Big Bash, etc.) from Cricsheet to get far more history per player
+- Add pitch, weather and dew information
+- Model specific batter-versus-bowler matchups
+- Re-run after every season to keep ratings up to date
 
-Version tip: pickled scikit-learn models should be loaded with the same version that saved them. In Colab run pip show scikit-learn, then pin that version in requirements.txt (for example scikit-learn==1.6.1).
+## ⚠️ Disclaimer
 
-🖼️ Use your own background photo
+This project is for learning and demonstration only. Cricket is unpredictable and the model's accuracy is modest. Do not use it for betting.
 
-Save any cricket image (a batter mid-shot, a floodlit stadium) as assets/background.jpg (or .png / .webp). The app uses it automatically and falls back to the built-in SVG if it is missing. Use photos you have the right to use, for example from Unsplash or Pexels, and check their licence.
+## 👩‍💻 Author
 
-☁️ Deploy for free (Streamlit Community Cloud)
-Push this repo to GitHub (include psl_best_model.pkl and app_data.json).
-Go to share.streamlit.io, sign in with GitHub and click New app.
-Choose the repo, branch main and the main file app.py, then Deploy.
-🔄 Updating after a new season
+**Aayla Zahid**
+BSCS, The University of Lahore
 
-Add the new Cricsheet JSON files, re-run the notebook, then re-export psl_best_model.pkl and app_data.json and commit them. Elo ratings and form update automatically.
+---
 
-⚠️ Limitations
-Small dataset (354 matches); results vary a lot from season to season.
-Predictions are made at the toss: the toss result is a required input.
-The saved model uses only the toss and the Elo gap. Venue and bat/field choice are shown for context and are not model inputs.
-Team colours are approximate and the app uses short codes instead of official logos.
-🔮 Future work
-Train player ratings on other leagues (IPL, Big Bash) using shared Cricsheet player IDs
-Add pitch, weather and dew information
-Add batter-vs-bowler matchups
-🙏 Data
-
-Match data is in Cricsheet format. Please check Cricsheet's terms of use and credit them if you publish the data or results.
-
-👩‍💻 Author
-
-Laiba Bintay Naeem, BS Computer Science, The University of Lahore GitHub: @your-username
-
-📄 License
-
-MIT, see LICENSE (add one via GitHub: Add file → Create new file → LICENSE).
-
-🔗 Link
-
-https://psl-match-winner-predictor-aayla.streamlit.app/
+⭐ If you found this project interesting, consider giving the repo a star!
